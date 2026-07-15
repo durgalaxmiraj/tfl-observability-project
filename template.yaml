@@ -1,0 +1,155 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: TfL Line 244 – Ingestion + Observability Stack
+
+Parameters:
+  RawBucketName:
+    Type: String
+    Default: tfl-line244-raw
+  BronzeBucketName:
+    Type: String
+    Default: tfl-line244-bronze
+  AlertEmail:
+    Type: String
+    Default: your-email@example.com
+
+Resources:
+
+  RawBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref RawBucketName
+
+  BronzeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BronzeBucketName
+
+  TfLIngestionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: TfLIngestionS3Policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource:
+                  - !Sub arn:aws:s3:::${BronzeBucketName}/*
+
+  TfLIngestionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: tfl-line244-ingestion
+      Runtime: python3.11
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt TfLIngestionRole.Arn
+      Timeout: 30
+      CodeUri: s3://tfl-lambda-code-147692973370-new/lambda.zip
+      Environment:
+        Variables:
+          BRONZE_BUCKET: !Ref BronzeBucketName
+          TFL_APP_KEY: your-tfl-api-key-here
+      Events:
+        EveryFiveMinutes:
+          Type: Schedule
+          Properties:
+            Schedule: rate(5 minutes)
+
+  TfLSnsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: tfl-line244-alerts
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+
+  TfLDelayAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: TfL-Line244-Delay-Over-15-Minutes
+      Namespace: TfL/Line244
+      MetricName: Delay_Minutes
+      Dimensions:
+        - Name: LineId
+          Value: 244
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 15
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: missing
+      AlarmActions:
+        - !Ref TfLSnsTopic
+
+  TfLDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: TfL-Line244-Observability
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Average Delay (Last 3 Hours)",
+                "metrics": [
+                  [ "TfL/Line244", "Delay_Minutes", "LineId", "244", { "stat": "Average" } ]
+                ],
+                "period": 300,
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "start": "-3h"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 6,
+              "height": 6,
+              "properties": {
+                "title": "API Success Rate",
+                "metrics": [
+                  [ "TfL/Line244", "API_Success", { "stat": "Sum" } ],
+                  [ ".", "API_Error_5xx", { "stat": "Sum" } ]
+                ],
+                "view": "singleValue",
+                "region": "${AWS::Region}",
+                "period": 300
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Arrivals per Station (Last 3 Hours)",
+                "metrics": [
+                  [ "TfL/Line244", "Arrivals_Count", "StationName", "Unknown" ]
+                ],
+                "view": "bar",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "start": "-3h"
+              }
+            }
+          ]
+        }
