@@ -21,7 +21,10 @@ jobs:
 
       - name: Deploy CloudFormation stack
         run: |
+          set -x
           aws cloudformation deploy \
             --template-file template.yaml \
-            --stack-name tfl-line244-stack \
-            --capabilities CAPABILITY_IAM
+            --stack-name tfl-line244-stack-v3 \
+            --capabilities CAPABILITY_IAM \
+            --region eu-west-2
+
